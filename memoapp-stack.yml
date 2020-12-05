@@ -1,0 +1,248 @@
+# AWSテンプレートのバージョン。存在する唯一のバージョンが下記なので実質固定。
+AWSTemplateFormatVersion: '2010-09-09'
+# テンプレートの説明。実行時に表示されるので記載すべき。
+Description: Memoapp Template
+
+# パラメータ定義。
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+    Description: Select EC2 Instance type.
+
+  DBInstanceType:
+    Type: String
+    Default: db.t2.micro
+    AllowedValues:
+      - db.t2.micro
+      - db.t3.micro
+      - db.t3.small
+    Description: Select DB Instance type.
+
+  KeyPair:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: mykey
+    Description: Select keypair Name.
+
+# リソース定義。
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+  #各リソースの作成時に指定するプロパティ
+    Properties:
+      CidrBlock: 10.2.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: memoapp-vpc
+
+  # Subnet
+  SubnetAZ1a:
+      Type: AWS::EC2::Subnet
+      Properties:
+        CidrBlock: 10.2.0.0/24
+        VpcId: !Ref VPC
+        AvailabilityZone: ap-northeast-1a
+        Tags:
+          - Key: Name
+            Value: memoapp-subnetaz1a           
+  SubnetAZ1c:
+      Type: AWS::EC2::Subnet
+      Properties:
+        CidrBlock: 10.2.1.0/24
+        VpcId: !Ref VPC
+        AvailabilityZone: ap-northeast-1c
+        Tags:
+          - Key: Name
+            Value: memoapp-subnetaz1c
+
+  # InternetGateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: memoapp-gw
+  # VPCGatewayAttachment
+  GatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # RouteTable
+  RouteTable:
+      Type: AWS::EC2::RouteTable
+      Properties:
+        VpcId: !Ref VPC
+        Tags:
+          - Key: Name
+            Value: memoapp-route
+  RouteInternet:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+  RouteLocal:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref RouteTable
+      SubnetId: !Ref SubnetAZ1a
+
+  # SecurityGroup
+  SecurityGroupEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AWS Study EC2
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: memoapp-securityGroup-ec2
+  SecurityGroupRDS:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: AWS Study RDS
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SecurityGroupEC2
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: memoapp-securityGroup-rds
+
+  # EIP
+  #ElasticIPAssociate:
+    #Type: AWS::EC2::EIPAssociation
+    #Properties:
+      #EIP:
+      #InstanceId: !Ref EC2
+
+  # EC2
+  EC2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: ami-00f045aed21a55240
+      InstanceType: !Ref InstanceType
+      #SubnetId: !Ref SubnetAZ1a
+      # 削除保護
+      DisableApiTermination: false
+      InstanceInitiatedShutdownBehavior: stop
+      KeyName: !Ref KeyPair
+      Monitoring: false
+      #SecurityGroupIds:
+      #  - !Ref SecurityGroupEC2
+      NetworkInterfaces:
+        - AssociatePublicIpAddress: true
+          DeviceIndex: 0
+          SubnetId: !Ref SubnetAZ1a
+          GroupSet: 
+            - !Ref SecurityGroupEC2
+      Tags:
+        - Key: Name
+          Value: memoapp-ec2
+
+  # RDS
+  RDS:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      AllocatedStorage: 20
+      AllowMajorVersionUpgrade: false
+      AutoMinorVersionUpgrade: true
+      DBInstanceClass: !Ref DBInstanceType
+      Port: 3306
+      StorageType: gp2
+      BackupRetentionPeriod: 1
+      MasterUsername: root
+      MasterUserPassword: password
+      PreferredBackupWindow: 15:00-16:00
+      PreferredMaintenanceWindow: sun:18:00-sun:19:00
+      DBName: memoapp
+      Engine: mysql
+      EngineVersion: 8.0.21
+      LicenseModel: general-public-license
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      Tags:
+        - Key: Name
+          Value: memoapp-rds
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: Created from the RDS Management Console
+      SubnetIds:
+        - !Ref SubnetAZ1a
+        - !Ref SubnetAZ1c
+
+  # ELB
+  ELB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: memoapp-elb
+      SecurityGroups:
+        - !Ref SecurityGroupEC2
+      Subnets:
+        - !Ref SubnetAZ1a
+        - !Ref SubnetAZ1c
+      Tags:
+        - Key: Name
+          Value: memoapp-elb
+  ELBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: memoapp-elb-target-group
+      Port: 80
+      Protocol: HTTP
+      VpcId: !Ref VPC
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: "/"
+      HealthCheckPort: "traffic-port"
+      HealthCheckIntervalSeconds: 10
+      Matcher:
+        HttpCode: 200
+      Tags:
+        - Key: Name
+          Value: memoapp-elb-target-group
+      Targets:
+        - Id: !Ref EC2
+          Port: 80
+  ELBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ELB
+      DefaultActions:
+        - TargetGroupArn: !Ref ELBTargetGroup
+          Type: forward
+      Port: 80
+      Protocol: HTTP
